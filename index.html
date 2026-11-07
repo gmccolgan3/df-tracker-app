@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Dragon Fruit Tracker</title>
+  <meta name="description" content="A breeding notebook for dragon fruit: varieties, plants, crosses, fruit and family trees.">
+  <meta name="theme-color" content="#f6f4f1" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#100f0e" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="DF Tracker">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div class="app">
+    <nav class="nav" aria-label="Sections">
+      <a class="brand" href="#/home"><img src="icons/icon.svg" alt=""><span>Dragon Fruit<br>Tracker</span></a>
+      <a href="#/home" data-tab="home" data-icon="home"><span>Today</span></a>
+      <a href="#/plants" data-tab="garden" data-icon="sprout"><span>Garden</span></a>
+      <button class="add" data-act="add" data-icon="plus" aria-label="Add"><span>New</span></button>
+      <a href="#/crosses" data-tab="breeding" data-icon="cross"><span>Breeding</span></a>
+      <a href="#/insights" data-tab="insights" data-icon="chart"><span>Insights</span></a>
+    </nav>
+    <div class="main">
+      <header id="bar" class="bar"></header>
+      <main id="view"></main>
+    </div>
+  </div>
+
+  <div id="layer" hidden></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <div id="lightbox" hidden><img alt="Photo, full size"></div>
+
+  <script src="js/db.js"></script>
+  <script src="js/schema.js"></script>
+  <script src="js/varieties-seed.js"></script>
+  <script src="js/core.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/views.js"></script>
+  <script src="js/detail.js"></script>
+  <script src="js/form.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
