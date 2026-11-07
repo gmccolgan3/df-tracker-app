@@ -18,6 +18,14 @@ function todayTasks() {
     tasks.push({ icon: 'fruit', tone: 'brand', href: `#/crosses/${c.id}`, title: `${c.code} is ripening`,
       sub: t > to ? 'Should be ripe by now. Log the harvest.' : `${crossParents(c)} · ripe around ${fmtShort(from)} – ${fmtShort(to)}` });
   }
+  for (const f of S.fruits.filter((f) => f.stage === 'Growing' && pollinatedOn(f) && daysBetween(pollinatedOn(f), t) >= RIPE_FROM).sort((a, b) => natural(pollinatedOn(a), pollinatedOn(b)))) {
+    const late = daysBetween(pollinatedOn(f), t) > RIPE_TO;
+    tasks.push({ icon: 'fruit', tone: late ? 'warn' : 'brand', href: `#/fruits/${f.id}`, title: late ? `${f.tag} should be ripe` : `${f.tag} is ripening`,
+      sub: `${fruitParents(f)} · day ${daysBetween(pollinatedOn(f), t)}` });
+  }
+  for (const f of S.fruits.filter((f) => f.stage === 'Harvested' && f.harvestDate && daysBetween(f.harvestDate, t) <= 14)) {
+    tasks.push({ icon: 'drop', tone: 'purple', href: `#/fruits/${f.id}`, title: `Taste ${f.tag}`, sub: `Harvested ${fmtShort(f.harvestDate)} · record Brix and a score when you eat it` });
+  }
   for (const p of S.plants.filter((p) => p.grafted === 'Yes' && (!p.graftTook || p.graftTook === 'Waiting') && p.graftDate && daysBetween(p.graftDate, t) >= 14)) {
     tasks.push({ icon: 'graft', tone: 'green', href: `#/plants/${p.id}`, title: `Did the graft on ${p.tag} take?`, sub: `Grafted ${daysBetween(p.graftDate, t)} days ago` });
   }
@@ -38,7 +46,14 @@ function taskRow(t) {
 function activity() {
   const ev = [];
   S.crosses.forEach((c) => ev.push({ date: c.date, icon: 'cross', href: `#/crosses/${c.id}`, text: `Pollinated ${crossParents(c)}`, sub: c.code }));
-  S.fruits.forEach((f) => ev.push({ date: f.harvestDate, icon: 'fruit', href: `#/fruits/${f.id}`, text: `Harvested from ${plantLabel(byId('plants', f.plantId))}`, sub: [num(f.weight) && fmt(f.weight) + ' g', brixOf(f) != null && fmt(brixOf(f), 1) + ' °Bx'].filter(Boolean).join(' · ') }));
+  S.fruits.forEach((f) => {
+    const href = `#/fruits/${f.id}`;
+    const measured = [num(f.weight) && fmt(f.weight) + ' g', brixOf(f) != null && fmt(brixOf(f), 1) + ' °Bx'].filter(Boolean).join(' · ');
+    if (!f.crossId && f.pollinatedDate) ev.push({ date: f.pollinatedDate, icon: 'cross', href, text: `Pollinated ${f.tag}`, sub: fruitParents(f) });
+    if (f.harvestDate) ev.push({ date: f.harvestDate, icon: 'fruit', href, text: `Harvested ${f.tag}`, sub: [byId('plants', f.plantId)?.tag, measured].filter(Boolean).join(' · ') });
+    if (f.stage === 'Eaten' && f.eatenDate) ev.push({ date: f.eatenDate, icon: 'drop', href, text: `Ate ${f.tag}`, sub: num(f.overall) ? `Scored ${f.overall}/5` : '' });
+    if (f.stage === 'Lost' && f.lostDate) ev.push({ date: f.lostDate, icon: 'x', href, text: `Lost ${f.tag}`, sub: f.lostReason || '' });
+  });
   S.logs.forEach((l) => ev.push({ date: l.date, icon: 'note', href: `#/logs/${l.id}`, text: `${l.kind}${num(l.count) != null ? ` (${l.count})` : ''}`, sub: byId('plants', l.plantId)?.tag || '' }));
   S.plants.forEach((p) => ev.push({ date: p.date || p.createdAt?.slice(0, 10), icon: 'sprout', href: `#/plants/${p.id}`, text: p.origin === 'Seedling' ? `Seedling ${p.tag} came up` : `Added ${plantLabel(p)}`, sub: p.origin === 'Cutting' ? 'Cutting' : '' }));
   return ev.filter((e) => e.date).sort((a, b) => natural(b.date, a.date)).slice(0, 6);
@@ -73,12 +88,14 @@ function viewToday() {
   const seedlings = S.plants.filter((p) => p.origin === 'Seedling' && p.status === 'Active');
   const best = [...S.fruits].filter((f) => num(f.overall) != null || brixOf(f) != null)
     .sort((a, b) => (num(b.overall) ?? 0) - (num(a.overall) ?? 0) || (brixOf(b) ?? 0) - (brixOf(a) ?? 0))[0];
+  const growing = S.fruits.filter((f) => f.stage === 'Growing').sort((a, b) => natural(pollinatedOn(a), pollinatedOn(b)));
   const tasks = todayTasks();
   const ev = activity();
 
   view.innerHTML = `
     ${tasks.length ? section('To do', `<div class="card list">${tasks.map(taskRow).join('')}</div>`, `<span class="badge">${tasks.length}</span>`) : `
       <div class="all-clear">${icon('check')}<span><b>Nothing waiting on you</b><small>New pollinations and grafts show up here when they need checking.</small></span></div>`}
+    ${growing.length ? section('Growing now', `<div class="card list">${growing.slice(0, 5).map(fruitRow).join('')}</div>`, `<a class="link" href="#/fruits?f=Growing">${growing.length > 5 ? `All ${growing.length}` : 'All fruit'}</a>`) : ''}
     ${section(`${year} so far`, metrics([
       ['Crosses', crossesYr.length],
       ['Set rate', setRate == null ? '–' : Math.round(setRate * 100), setRate == null ? '' : '%'],
@@ -128,14 +145,23 @@ function crossRow(c) {
   });
 }
 
+function fruitStageText(f) {
+  const from = pollinatedOn(f);
+  if (f.stage === 'Growing') return from ? `Pollinated ${fmtShort(from)} · day ${daysBetween(from, today())}` : 'Growing';
+  if (f.stage === 'Harvested') return `Harvested ${fmtShort(f.harvestDate)}`;
+  if (f.stage === 'Eaten') return f.eatenDate ? `Eaten ${fmtShort(f.eatenDate)}` : `Harvested ${fmtShort(f.harvestDate)}`;
+  if (f.stage === 'Lost') return ['Lost', fmtShort(f.lostDate), f.lostReason].filter(Boolean).join(' · ');
+  return '';
+}
+
 function fruitRow(f) {
   const p = byId('plants', f.plantId);
-  const c = byId('crosses', f.crossId);
   return row({
     href: `#/fruits/${f.id}`,
-    lead: avatar(f, 'fruit', fleshTone(f.fleshColor) || 'brand'),
-    title: esc(p ? `${p.tag} · ${varietyName(p.varietyId) || (p.origin === 'Seedling' ? 'Seedling' : '')}`.replace(/ · $/, '') : '(deleted plant)'),
-    sub: esc([fmtShort(f.harvestDate), num(f.weight) ? fmt(f.weight) + ' g' : '', c ? c.code : ''].filter(Boolean).join(' · ')),
+    lead: avatar(f, 'fruit', f.stage === 'Growing' ? 'green' : fleshTone(f.fleshColor) || 'brand'),
+    title: `${esc(f.tag || 'Fruit')} <span class="muted">· ${esc(p ? fruitParents(f) : '(deleted plant)')}</span>`,
+    sub: esc([fruitStageText(f), num(f.weight) ? fmt(f.weight) + ' g' : ''].filter(Boolean).join(' · ')),
+    meta: f.stage !== 'Eaten' && f.stage !== 'Harvested' ? statusPill(f.stage) : '',
     trail: `${brixOf(f) != null ? `<span class="trail-num">${fmt(brixOf(f), 1)}<small>°Bx</small></span>` : ''}${ratingDots(num(f.overall))}`,
   });
 }
@@ -155,7 +181,7 @@ const shortSpecies = (s) => (s ? s.replace(/\s*\(.*\)/, '') : '');
 
 /* ---------- Garden ---------- */
 
-const listState = { plants: { q: '', f: 'active' }, varieties: { q: '', f: 'all' }, crosses: { q: '', f: 'all' }, logs: { q: '', f: 'all' } };
+const listState = { plants: { q: '', f: 'active' }, varieties: { q: '', f: 'all' }, fruits: { q: '', f: 'all' }, crosses: { q: '', f: 'all' }, logs: { q: '', f: 'all' } };
 
 const LISTS = {
   plants: {
@@ -171,6 +197,13 @@ const LISTS = {
     sort: (a, b) => natural(a.name, b.name),
     text: (v) => [v.name, v.synonyms, v.traits, v.notes, v.source].join(' '),
     rowFn: varietyRow,
+  },
+  fruits: {
+    filters: [['all', 'All'], ...FRUIT_STAGES.map((s) => [s, s])],
+    test: new Proxy({}, { get: (_, k) => (k === 'all' ? () => true : (f) => f.stage === k) }),
+    sort: fruitOrder,
+    text: (f) => [f.tag, plantLabel(byId('plants', f.plantId)), fruitParents(f), byId('crosses', f.crossId)?.code, f.stage, f.notes, f.tasteNotes].join(' '),
+    rowFn: fruitRow,
   },
   crosses: {
     filters: [['all', 'All'], ['Waiting', 'Waiting'], ['Fruit set', 'Fruit set'], ['Seedlings', 'Seedlings'], ['Failed', 'Not set']],
@@ -227,14 +260,16 @@ function emptyByStore(store) {
   if (store === 'plants') return emptyState('sprout', 'No plants yet', 'Add each plant with the tag on its label. Cuttings and seedlings can point back to their parents.', add('Add a plant'));
   if (store === 'varieties') return emptyState('tag', 'No varieties yet', 'Add the varieties you grow, or start from a list of known ones.',
     `<div class="btn-row"><button class="btn primary" data-act="seed-varieties">Load ${VARIETY_SEED.length} known varieties</button><a class="btn" href="#/varieties/new">Add one</a></div>`);
+  if (store === 'fruits') return emptyState('fruit', 'No fruit yet', 'Tag each fruit when you pollinate its flower. Follow it while it grows, then record the harvest and how it tasted.', add('Tag a fruit'));
   if (store === 'crosses') return emptyState('cross', 'No crosses yet', 'On pollination night, tap + and choose Pollination. Write the cross code on the flower tag.', add('Record a pollination'));
   return emptyState('note', 'No journal entries yet', 'Record flowering, pruning, feeding and problems from a plant’s page.');
 }
 
-function viewGarden(seg) {
+function viewGarden(seg, query = {}) {
   setBar({ title: 'Garden', large: true });
+  if (query.f && LISTS[seg].filters.some(([k]) => k === query.f)) listState[seg].f = query.f;
   view.innerHTML = `
-    ${segmented([['plants', `Plants <span class="seg-n">${S.plants.filter((p) => p.status === 'Active').length}</span>`], ['varieties', `Varieties <span class="seg-n">${S.varieties.length}</span>`]], seg, 'garden-seg')}
+    ${segmented([['plants', `Plants <span class="seg-n">${S.plants.filter((p) => p.status === 'Active').length}</span>`], ['fruits', `Fruit <span class="seg-n">${S.fruits.length}</span>`], ['varieties', `Varieties <span class="seg-n">${S.varieties.length}</span>`]], seg, 'garden-seg')}
     ${listBody(seg)}`;
   drawList();
 }
@@ -258,10 +293,10 @@ const insightState = { tab: 'fruit', rank: { fruit: 'score', crosses: 'score', s
 const RANKS = {
   fruit: {
     options: [['score', 'Score'], ['brix', 'Brix'], ['weight', 'Weight'], ['newest', 'Newest']],
-    rows: () => S.fruits,
+    rows: () => S.fruits.filter(isPicked),
     value: { score: (f) => num(f.overall), brix: brixOf, weight: (f) => num(f.weight), newest: (f) => f.harvestDate || null },
     show: { score: (v) => `${v}<small>/5</small>`, brix: (v) => `${fmt(v, 1)}<small>°Bx</small>`, weight: (v) => `${fmt(v)}<small>g</small>`, newest: (v) => esc(fmtShort(v)) },
-    item: (f) => ({ href: `#/fruits/${f.id}`, lead: avatar(f, 'fruit', fleshTone(f.fleshColor) || 'brand'), title: plantLabel(byId('plants', f.plantId)), sub: [fmtShort(f.harvestDate), byId('crosses', f.crossId)?.code].filter(Boolean).join(' · ') }),
+    item: (f) => ({ href: `#/fruits/${f.id}`, lead: avatar(f, 'fruit', fleshTone(f.fleshColor) || 'brand'), title: `${f.tag} · ${fruitParents(f)}`, sub: [fmtShort(f.harvestDate), byId('plants', f.plantId)?.tag, byId('crosses', f.crossId)?.code].filter(Boolean).join(' · ') }),
     summary: (list) => { const s = fruitStats(list); return `${plural(s.n, 'fruit', 'fruit')} · average ${fmt(s.weight)} g · ${fmt(s.brix, 1)} °Bx · ${fmt(s.overall, 1)}/5`; },
   },
   crosses: {
@@ -299,7 +334,7 @@ function viewInsights() {
 
   let body;
   if (!all.length) {
-    body = tab === 'fruit' ? emptyState('fruit', 'No fruit logged yet', 'Tap + and choose Harvest when you pick one. Weight, Brix and a score are enough to start ranking.')
+    body = tab === 'fruit' ? emptyState('fruit', 'No harvested fruit yet', 'Fruit shows up here once it’s marked as harvested. Weight, Brix and a score are enough to start ranking.')
       : tab === 'crosses' ? emptyState('cross', 'No crosses yet', 'Crosses are ranked by the fruit they produce.')
         : emptyState('sprout', 'No seedlings yet', 'Add seedlings from a cross’s page once the seeds come up.');
   } else if (!ranked.length) {
@@ -410,14 +445,16 @@ function viewHelp() {
   setBar({ title: 'How it works', back: '#/settings' });
   view.innerHTML = `
     <article class="card pad prose">
-      <p class="lead">Every plant gets a tag and every pollination gets a cross code. Fruit and seedlings point back to the cross they came from, so you can trace any plant’s family and see which pairings are worth repeating.</p>
+      <p class="lead">Every plant gets a tag, every pollination gets a cross code and every fruit gets a fruit tag. Fruit and seedlings point back to the cross they came from, so you can trace any plant’s family and see which pairings are worth repeating.</p>
       <h2>A season, step by step</h2>
       <ol>
         <li><b>Varieties.</b> Add each variety once, or load the known ones from Settings.</li>
         <li><b>Plants.</b> Add each plant with its tag. Cuttings point to the plant they were cut from; grafted plants record their rootstock.</li>
         <li><b>Pollination night.</b> Tap <b>+</b>, then <b>Pollination</b>. The seed parent ♀ is the plant whose flower you pollinate; the pollen parent ♂ is where the pollen came from. Write the cross code on a tag on the flower.</li>
         <li><b>A week or two later.</b> Today asks whether it set fruit. One tap records the answer.</li>
-        <li><b>Harvest.</b> Tap <b>+</b>, then <b>Harvest</b>. Weight, Brix and an overall score are enough; size, looks and taste are there when you want them.</li>
+        <li><b>Tag each fruit.</b> Tap <b>+</b>, then <b>Fruit</b>, and give it a number (F-001, F-002…) to write on its label, with the pollination date and where the pollen came from. Picking its cross fills those in. Fruit can also be tagged without a cross, for example when insects pollinated it.</li>
+        <li><b>While it grows.</b> Today lists fruit that should be ripening. On the fruit’s page, tap <b>Harvested today</b> when you pick it, or <b>It was lost</b> if it dropped or rotted.</li>
+        <li><b>Harvest and tasting.</b> Weigh it and record Brix and an overall score; size, looks and taste are there when you want them. Tap <b>Eaten today</b> when you cut it open to record how it tasted.</li>
         <li><b>Seeds.</b> Record seeds sown and how many came up on the cross, then add the promising seedlings.</li>
         <li><b>Years later.</b> Log the seedlings’ own fruit. When one is a keeper, open it, tap <b>⋯</b> and choose <b>Name as a variety</b>.</li>
       </ol>

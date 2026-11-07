@@ -56,16 +56,19 @@ function defaultsFor(store, q) {
     varieties: { origin: 'Named variety', selfFertile: 'Unknown' },
     plants: { origin: 'Acquired', status: 'Active', grafted: 'No', date: today(), tag: nextCode('plants', 'tag', 'P') },
     crosses: { code: nextCode('crosses', 'code', 'X'), date: today(), pollenSource: 'Another plant', flowers: 1, timing: 'Night', bagged: 'Yes' },
-    fruits: { harvestDate: today() },
+    fruits: { tag: nextCode('fruits', 'tag', 'F'), pollinatedDate: today(), pollenSource: 'Another plant', stage: 'Growing' },
     logs: { date: today(), kind: 'Flowers opened' },
   }[store] || {};
   const rec = { ...d, ...q };
-  if (store === 'fruits' && q.crossId && !q.plantId) rec.plantId = byId('crosses', q.crossId)?.seedPlantId || '';
+  if (store === 'fruits' && q.crossId) Object.assign(rec, fromCross(byId('crosses', q.crossId)), q.plantId ? { plantId: q.plantId } : {});
   if (store === 'plants' && q.origin === 'Seedling') { rec.date = ''; rec.location = rec.location || 'Seedling tray'; }
   return rec;
 }
 
-const FORM_TITLES = { varieties: 'variety', plants: 'plant', crosses: 'pollination', fruits: 'harvest', logs: 'journal entry' };
+// A fruit from a cross shares its plant, date and pollen.
+const fromCross = (c) => (c ? { plantId: c.seedPlantId || '', pollinatedDate: c.date || '', pollenSource: c.pollenSource || '', pollenPlantId: c.pollenPlantId || '' } : {});
+
+const FORM_TITLES = { varieties: 'variety', plants: 'plant', crosses: 'pollination', fruits: 'fruit', logs: 'journal entry' };
 
 function viewForm(store, id, query) {
   const existing = id ? byId(store, id) : null;
@@ -93,7 +96,7 @@ function viewForm(store, id, query) {
       ${PHOTO_STORES.includes(store) ? `<div class="photo-row" id="photoRow"></div>` : ''}
       <div class="card pad fields">${top.map((f) => fieldHtml(f, rec)).join('')}</div>
       ${groups.map((g) => { const n = filled(g); return `
-        <details class="card fold"${n && g.name === 'Grafting' ? ' open' : ''}>
+        <details class="card fold"${(n && g.name === 'Grafting') || g.name === query?.open ? ' open' : ''}${g.fields.some((f) => visible(f, rec)) ? '' : ' hidden'}>
           <summary><span class="fold-title">${esc(g.name)}</span><span class="fold-n">${n ? `${n} filled` : 'Optional'}</span>${icon('down')}</summary>
           <div class="fold-body fields">${g.fields.map((f) => fieldHtml(f, rec)).join('')}</div>
         </details>`; }).join('')}
@@ -141,8 +144,28 @@ function viewForm(store, id, query) {
   const refresh = () => {
     const vals = read();
     for (const f of fields) if (f.showIf) form.querySelector(`.field[data-k="${f.k}"]`).hidden = !f.showIf(vals);
+    // A section whose fields are all hidden goes too.
+    form.querySelectorAll('details.fold').forEach((d) => { d.hidden = ![...d.querySelectorAll('.field')].some((el) => !el.hidden); });
   };
-  form.addEventListener('change', refresh);
+  const setValue = (k, v) => {
+    const radios = form.querySelectorAll(`input[type=radio][name="${k}"]`);
+    if (radios.length) radios.forEach((r) => { r.checked = r.value === v; });
+    else { const el = form.querySelector(`#f_${k}`); if (el) el.value = v ?? ''; }
+  };
+  form.addEventListener('change', (e) => {
+    // Moving a fruit to a later stage dates it today unless a date is already there.
+    if (store === 'fruits' && e.target.name === 'stage') {
+      const vals = read();
+      const dateFor = { Harvested: ['harvestDate'], Eaten: ['harvestDate', 'eatenDate'], Lost: ['lostDate'] }[vals.stage] || [];
+      for (const k of dateFor) if (!vals[k]) setValue(k, today());
+    }
+    // A fruit from a cross shares its plant, date and pollen.
+    if (store === 'fruits' && e.target.name === 'crossId') {
+      const c = byId('crosses', e.target.value);
+      if (c) for (const [k, v] of Object.entries(fromCross(c))) setValue(k, v);
+    }
+    refresh();
+  });
   form.addEventListener('input', () => { formDirty = true; });
 
   // Tapping the chosen chip again clears it.
@@ -158,13 +181,6 @@ function viewForm(store, id, query) {
     }
     const un = e.target.closest('[data-act="unphoto"]');
     if (un) { const pid = un.closest('figure').dataset.id; photos = photos.filter((x) => x !== pid); formDirty = true; drawPhotos(); }
-  });
-
-  // A fruit usually grew on the cross's seed parent.
-  form.querySelector('#f_crossId')?.addEventListener('change', (e) => {
-    const plantSel = form.querySelector('#f_plantId');
-    const c = byId('crosses', e.target.value);
-    if (store === 'fruits' && c && plantSel && !plantSel.value) plantSel.value = c.seedPlantId || '';
   });
 
   form.addEventListener('submit', async (e) => {
@@ -205,7 +221,13 @@ function validate(store, v, id) {
     if (num(v.fruitSet) != null && num(v.flowers) != null && v.fruitSet > v.flowers) return 'More fruits set than flowers pollinated.';
     if (num(v.germinated) != null && num(v.seedsSown) != null && v.germinated > v.seedsSown) return 'More seeds came up than were sown.';
   }
-  if (store === 'fruits' && num(v.pulpWeight) != null && num(v.weight) != null && v.pulpWeight > v.weight) return 'The flesh weighs more than the whole fruit.';
+  if (store === 'fruits') {
+    if (S.fruits.some((f) => f.id !== id && (f.tag || '').toLowerCase() === v.tag.toLowerCase())) return `Another fruit already has the tag ${v.tag}.`;
+    if (v.pollenSource === 'Another plant' && v.pollenPlantId && v.pollenPlantId === v.plantId) return 'The pollen came from the same plant the fruit is growing on. Did you mean “Self”?';
+    if (v.harvestDate && v.pollinatedDate && v.harvestDate < v.pollinatedDate) return 'The harvest date is before the pollination date.';
+    if (v.eatenDate && v.harvestDate && v.eatenDate < v.harvestDate) return 'The eaten date is before the harvest date.';
+    if (num(v.pulpWeight) != null && num(v.weight) != null && v.pulpWeight > v.weight) return 'The flesh weighs more than the whole fruit.';
+  }
   if (store === 'varieties' && S.varieties.some((x) => x.id !== id && x.name.toLowerCase() === v.name.toLowerCase())) return `There is already a variety called ${v.name}.`;
   return null;
 }

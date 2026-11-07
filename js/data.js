@@ -23,7 +23,7 @@ function referencesTo(store, id) {
   }
   if (store === 'plants') {
     add(S.crosses.filter((c) => c.seedPlantId === id || c.pollenPlantId === id).length, 'cross', 'crosses');
-    add(S.fruits.filter((f) => f.plantId === id).length, 'fruit record');
+    add(S.fruits.filter((f) => f.plantId === id || f.pollenPlantId === id).length, 'fruit record');
     add(S.plants.filter((p) => p.parentPlantId === id).length, 'cutting');
     add(S.varieties.filter((v) => v.fromPlantId === id).length, 'variety', 'varieties');
   }
@@ -85,6 +85,45 @@ async function setFruitSet(crossId, n) {
   await saveRecord('crosses', c);
   toast(n ? `${plural(n, 'fruit')} set` : 'Marked as not set');
   render();
+}
+
+// One-tap stage change for a fruit, dated today.
+async function setFruitStage(id, stage) {
+  const f = byId('fruits', id);
+  if (!f) return;
+  if (stage === 'Lost') {
+    const reason = await dialog({ title: `What happened to ${f.tag}?`, buttons: [...FIELDS.fruits.find((x) => x.k === 'lostReason').options.map((o) => ({ label: o, value: o })), { label: 'Cancel', value: null }] });
+    if (!reason) return;
+    f.lostReason = reason;
+  }
+  const t = today();
+  f.stage = stage;
+  if (stage === 'Harvested' || stage === 'Eaten') f.harvestDate = f.harvestDate || t;
+  if (stage === 'Eaten') f.eatenDate = t;
+  if (stage === 'Lost') f.lostDate = t;
+  await saveRecord('fruits', f);
+  if (stage === 'Eaten') { toast('Marked as eaten. Now record how it tasted.'); location.hash = `#/fruits/${id}/edit?open=Taste`; return; }
+  toast(stage === 'Harvested' ? `${f.tag} harvested` : `${f.tag} marked as lost`);
+  render();
+}
+
+// Fruit from before per-fruit tracking were harvest records: give them a tag, a stage and their cross's pollination.
+async function upgradeFruit() {
+  const old = S.fruits.filter((f) => !f.stage || !f.tag).sort((a, b) => natural(a.harvestDate, b.harvestDate));
+  for (const f of old) {
+    if (!f.tag) f.tag = nextCode('fruits', 'tag', 'F');
+    if (!f.stage) {
+      const tasted = num(f.overall) != null || brixOf(f) != null || ['sweetness', 'flavor', 'texture', 'acidity'].some((k) => num(f[k]) != null);
+      f.stage = tasted ? 'Eaten' : 'Harvested';
+    }
+    const c = byId('crosses', f.crossId);
+    if (c) {
+      for (const [k, v] of Object.entries(fromCross(c))) if (!f[k]) f[k] = v;
+    } else if (!f.pollenSource) {
+      f.pollenSource = 'Open / insects'; // the old form said to leave the cross empty for open-pollinated fruit
+    }
+  }
+  if (old.length) await DB.putMany('fruits', old);
 }
 
 /* ---------- backup ---------- */
@@ -162,6 +201,7 @@ async function restoreFrom(file) {
       for (const f of list) if (!cf[s].some((x) => x.k === f.k)) cf[s].push(f);
     }
     await saveSettings();
+    await upgradeFruit();
   } catch (err) { console.error(err); await notice('Restore stopped partway', err.message); }
   toast(`Restored: ${added} new, ${updated} updated`);
   render();
@@ -174,17 +214,16 @@ function csvFor(store) {
   const cell = (v) => { const s = String(v ?? ''); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
   const head = ['id', ...fields.map((f) => f.label + (f.unit ? ` (${f.unit})` : '')), 'Created', 'Updated'];
   if (store === 'crosses') head.push('Status', 'Fruit set rate', 'Fruit recorded', 'Seedlings');
-  if (store === 'fruits') head.push('Variety', 'Edible share', 'Length / width', 'Days from pollination');
+  if (store === 'fruits') head.push('Variety', 'Edible share', 'Length / width', 'Days from pollination to harvest');
   const lines = [head.map(cell).join(',')];
   for (const r of S[store]) {
     const row = [r.id, ...fields.map((f) => (f.type === 'ref' ? (byId(f.ref, r[f.k]) ? LABEL[f.ref](byId(f.ref, r[f.k])) : '') : r[f.k])), r.createdAt, r.updatedAt];
     if (store === 'crosses') { const s = crossStats(r); row.push(crossStatus(r), s.setRate == null ? '' : fmt(s.setRate, 3), s.fruits.length, s.seedlings.length); }
     if (store === 'fruits') {
-      const c = byId('crosses', r.crossId);
       row.push(varietyName(byId('plants', r.plantId)?.varietyId),
         num(r.weight) && num(r.pulpWeight) ? fmt(r.pulpWeight / r.weight, 3) : '',
         num(r.length) && num(r.diameter) ? fmt(r.length / r.diameter, 2) : '',
-        c && c.date && r.harvestDate ? daysBetween(c.date, r.harvestDate) : '');
+        daysToRipen(r) ?? '');
     }
     lines.push(row.map(cell).join(','));
   }
@@ -258,12 +297,17 @@ async function loadDemo() {
   const s1 = mk({ tag: 'P-005', origin: 'Seedling', crossId: x1.id, date: d(740), location: 'Seedling bench', status: 'Active', vigor: 5, firstFlower: d(60) });
   const s2 = mk({ tag: 'P-006', origin: 'Seedling', crossId: x1.id, date: d(738), location: 'Post 4', status: 'Active', vigor: 3, grafted: 'Yes', rootstockId: vW.id, graftDate: d(500), graftMethod: 'Flat', graftTook: 'Yes' });
   const s3 = mk({ tag: 'P-007', origin: 'Seedling', crossId: x1.id, date: d(735), location: 'Seedling bench', status: 'Culled', vigor: 1, health: 'Stem canker, removed.' });
-  const fr = (o) => mk({ shape: 'Oval', skinColor: 'Pink / red', bracts: 'Medium', bractColor: 'Green tips', cracking: 'None', seeds: 'Average', ...o });
+  const fr = (o) => mk({ stage: 'Eaten', shape: 'Oval', skinColor: 'Pink / red', bracts: 'Medium', bractColor: 'Green tips', cracking: 'None', seeds: 'Average', ...o });
+  const fromX1 = { plantId: p2.id, crossId: x1.id, pollinatedDate: x1.date, pollenSource: 'Another plant', pollenPlantId: p1.id };
   const fruits = [
-    fr({ plantId: p2.id, crossId: x1.id, harvestDate: d(762), weight: 410, length: 112, diameter: 86, peelThickness: 3.1, pulpWeight: 300, fleshColor: 'Red', brixCenter: 16.2, brixEdge: 12.8, sweetness: 4, acidity: 2, flavor: 4, texture: 4, appearance: 4, shelfLife: 7, overall: 4 }),
-    fr({ plantId: p2.id, crossId: x1.id, harvestDate: d(760), weight: 365, length: 105, diameter: 80, peelThickness: 3.4, pulpWeight: 262, fleshColor: 'Red', brixCenter: 15.5, brixEdge: 12.1, sweetness: 4, acidity: 2, flavor: 3, texture: 4, appearance: 3, shelfLife: 6, overall: 3 }),
-    fr({ plantId: p1.id, harvestDate: d(400), weight: 520, length: 128, diameter: 92, peelThickness: 2.8, pulpWeight: 395, fleshColor: 'White', brixCenter: 13.1, brixEdge: 10.4, sweetness: 3, acidity: 1, flavor: 2, texture: 3, appearance: 4, shelfLife: 9, overall: 3 }),
-    fr({ plantId: s1.id, harvestDate: d(12), weight: 455, length: 108, diameter: 94, peelThickness: 2.6, pulpWeight: 350, shape: 'Round', fleshColor: 'Magenta / purple', brixCenter: 18.4, brixEdge: 15.9, sweetness: 5, acidity: 2, flavor: 5, texture: 4, appearance: 5, shelfLife: 8, overall: 5, tasteNotes: 'Berry-like, very sweet. Keep breeding.' }),
+    fr({ tag: 'F-001', ...fromX1, harvestDate: d(762), eatenDate: d(759), weight: 410, length: 112, diameter: 86, peelThickness: 3.1, pulpWeight: 300, fleshColor: 'Red', brixCenter: 16.2, brixEdge: 12.8, sweetness: 4, acidity: 2, flavor: 4, texture: 4, appearance: 4, shelfLife: 7, overall: 4 }),
+    fr({ tag: 'F-002', ...fromX1, harvestDate: d(760), eatenDate: d(757), weight: 365, length: 105, diameter: 80, peelThickness: 3.4, pulpWeight: 262, fleshColor: 'Red', brixCenter: 15.5, brixEdge: 12.1, sweetness: 4, acidity: 2, flavor: 3, texture: 4, appearance: 3, shelfLife: 6, overall: 3 }),
+    fr({ tag: 'F-003', plantId: p1.id, pollinatedDate: d(436), pollenSource: 'Open / insects', harvestDate: d(400), eatenDate: d(395), weight: 520, length: 128, diameter: 92, peelThickness: 2.8, pulpWeight: 395, fleshColor: 'White', brixCenter: 13.1, brixEdge: 10.4, sweetness: 3, acidity: 1, flavor: 2, texture: 3, appearance: 4, shelfLife: 9, overall: 3 }),
+    fr({ tag: 'F-004', plantId: s1.id, pollinatedDate: d(56), pollenSource: 'Another plant', pollenPlantId: p1.id, harvestDate: d(12), eatenDate: d(9), weight: 455, length: 108, diameter: 94, peelThickness: 2.6, pulpWeight: 350, shape: 'Round', fleshColor: 'Magenta / purple', brixCenter: 18.4, brixEdge: 15.9, sweetness: 5, acidity: 2, flavor: 5, texture: 4, appearance: 5, shelfLife: 8, overall: 5, tasteNotes: 'Berry-like, very sweet. Keep breeding.' }),
+    fr({ tag: 'F-005', plantId: p2.id, pollinatedDate: d(40), pollenSource: 'Another plant', pollenPlantId: p1.id, stage: 'Harvested', harvestDate: d(2), weight: 390, fleshColor: 'Red' }),
+    mk({ tag: 'F-006', plantId: p3.id, crossId: x2.id, pollinatedDate: x2.date, pollenSource: 'Another plant', pollenPlantId: p4.id, stage: 'Growing' }),
+    mk({ tag: 'F-007', plantId: p4.id, pollinatedDate: d(20), pollenSource: 'Self', stage: 'Growing', notes: 'Yellow type, so expect months rather than weeks.' }),
+    mk({ tag: 'F-008', plantId: p1.id, pollinatedDate: d(50), pollenSource: 'Open / insects', stage: 'Lost', lostDate: d(25), lostReason: 'Dropped' }),
   ];
   const logs = [
     mk({ plantId: s1.id, date: d(64), kind: 'Flower buds', count: 3 }),

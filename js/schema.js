@@ -7,7 +7,7 @@
 // starts a section that folds away. A field keyed `notes` always goes last.
 // `showIf` hides a field unless it applies. Short select lists show as tap-to-pick chips.
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 // Hylocereus was folded into Selenicereus in 2017; growers still use both names.
 const SPECIES = [
@@ -21,6 +21,10 @@ const SKIN = ['Pink / red', 'Yellow', 'Orange', 'Other'];
 const FLESH = ['White', 'Light pink', 'Pink', 'Red', 'Magenta / purple', 'Other'];
 
 const PLANT_STATUS = ['Active', 'Dead', 'Given away', 'Culled'];
+const POLLEN_SOURCES = ['Another plant', 'Self', 'Open / insects'];
+// Each fruit is tagged when it is pollinated and followed until it is eaten (or lost).
+const FRUIT_STAGES = ['Growing', 'Harvested', 'Eaten', 'Lost'];
+const picked = (r) => r.stage === 'Harvested' || r.stage === 'Eaten';
 const LOG_KINDS = ['Flower buds', 'Flowers opened', 'Growth', 'Pruning', 'Fertilizer / treatment', 'Pest / disease', 'Note'];
 
 const FIELDS = {
@@ -79,7 +83,7 @@ const FIELDS = {
     { half: true, k: 'date', label: 'Pollinated on', type: 'date', required: true },
     { k: 'seedPlantId', label: 'Seed parent ♀', type: 'ref', ref: 'plants', required: true,
       hint: 'The plant whose flower you pollinated' },
-    { k: 'pollenSource', label: 'Pollen from', type: 'select', options: ['Another plant', 'Self', 'Open / insects'], required: true },
+    { k: 'pollenSource', label: 'Pollen from', type: 'select', options: POLLEN_SOURCES, required: true },
     { k: 'pollenPlantId', label: 'Pollen parent ♂', type: 'ref', ref: 'plants', showIf: (r) => r.pollenSource === 'Another plant' },
     { k: 'flowers', label: 'Flowers pollinated', type: 'number', step: 1, min: 0 },
     { k: 'fruitSet', label: 'Fruits set', type: 'number', step: 1, min: 0,
@@ -98,10 +102,19 @@ const FIELDS = {
   ],
 
   fruits: [
-    { k: 'plantId', label: 'Grew on', type: 'ref', ref: 'plants', required: true },
-    { k: 'crossId', label: 'From cross', type: 'ref', ref: 'crosses',
-      hint: 'The pollination that made this fruit. Leave empty if open-pollinated.' },
-    { k: 'harvestDate', label: 'Harvested', type: 'date', required: true },
+    { half: true, k: 'tag', label: 'Fruit tag', type: 'text', required: true, hint: 'The number or name on the fruit’s label' },
+    { half: true, k: 'pollinatedDate', label: 'Pollinated on', type: 'date', required: true },
+    { k: 'plantId', label: 'Growing on ♀', type: 'ref', ref: 'plants', required: true, hint: 'The plant whose flower was pollinated' },
+    { k: 'pollenSource', label: 'Pollinated with', type: 'select', options: POLLEN_SOURCES, required: true },
+    { k: 'pollenPlantId', label: 'Pollen from ♂', type: 'ref', ref: 'plants', showIf: (r) => r.pollenSource === 'Another plant' },
+    { k: 'crossId', label: 'Part of cross', type: 'ref', ref: 'crosses',
+      hint: 'Optional. Picking one fills in the plant, date and pollen from that pollination.' },
+    { k: 'stage', label: 'Stage', type: 'select', options: FRUIT_STAGES, required: true },
+    { half: true, k: 'harvestDate', label: 'Harvested on', type: 'date', required: true, showIf: picked },
+    { half: true, k: 'eatenDate', label: 'Eaten on', type: 'date', showIf: (r) => r.stage === 'Eaten' },
+    { half: true, k: 'lostDate', label: 'Lost on', type: 'date', showIf: (r) => r.stage === 'Lost' },
+    { half: true, k: 'lostReason', label: 'What happened', type: 'select', options: ['Dropped', 'Rotted', 'Pests / animals', 'Split open', 'Other'],
+      showIf: (r) => r.stage === 'Lost' },
     { half: true, k: 'weight', label: 'Weight', type: 'number', unit: 'g', step: 1, min: 0 },
     { half: true, k: 'brixCenter', label: 'Brix, center', type: 'number', unit: '°Bx', step: 0.1, min: 0,
       hint: 'Refractometer reading. 11–15 is typical for white flesh.' },
@@ -142,6 +155,9 @@ const FIELDS = {
     { k: 'notes', label: 'Notes', type: 'textarea' },
   ],
 };
+
+// Measurements apply once a fruit is picked, so they stay out of the way while it grows.
+for (const f of FIELDS.fruits.slice(FIELDS.fruits.findIndex((x) => x.k === 'weight'))) if (!f.showIf && f.k !== 'notes') f.showIf = picked;
 
 // Stores that can carry photos.
 const PHOTO_STORES = ['varieties', 'plants', 'crosses', 'fruits', 'logs'];

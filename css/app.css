@@ -379,6 +379,25 @@ a.parent:hover { border-color: color-mix(in srgb, var(--brand) 40%, var(--line))
 .duo-caption h2 { font-size: 28px; font-weight: 800; letter-spacing: -.03em; }
 .duo-caption span:not(.pill) { color: var(--muted); flex: 1; min-width: max-content; }
 
+/* a fruit's stages, pollinated to eaten */
+.journey {
+  list-style: none; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
+  margin: 14px 0 0; padding: 16px 6px 14px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-1);
+}
+.journey li { position: relative; padding-top: 24px; text-align: center; min-width: 0; }
+.journey li::before {
+  content: ""; position: absolute; z-index: 1; top: 3px; left: 50%; width: 12px; height: 12px; margin-left: -6px;
+  border-radius: 50%; background: var(--surface-3);
+}
+.journey li + li::after { content: ""; position: absolute; top: 8px; right: 50%; width: 100%; height: 2px; background: var(--surface-3); }
+.journey li:is(.done, .now)::before, .journey li:is(.done, .now)::after { background: var(--brand); }
+.journey li.now::before { box-shadow: 0 0 0 4px var(--brand-soft); }
+.journey.lost li.now::before, .journey.lost li.now::after { background: var(--muted); box-shadow: 0 0 0 4px var(--surface-2); }
+.journey b { display: block; font-size: 13px; font-weight: 650; color: var(--muted); }
+.journey li:is(.done, .now) b { color: var(--text); }
+.journey span { display: block; font-size: 12px; color: var(--muted); margin-top: 1px; padding: 0 2px; overflow-wrap: anywhere; }
+
 .callout { display: flex; gap: 14px; margin-top: 14px; padding: 16px; border-radius: var(--radius); background: var(--tone-soft); }
 .callout-ico { flex: none; width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; background: var(--surface); color: var(--tone); }
 .callout-ico .i { width: 20px; height: 20px; }

@@ -19,7 +19,7 @@ function parseHash() {
   return [path.split('/').filter(Boolean), Object.fromEntries(new URLSearchParams(qs || ''))];
 }
 
-const TAB_OF = { home: 'home', plants: 'garden', varieties: 'garden', crosses: 'breeding', insights: 'insights', fruits: 'insights' };
+const TAB_OF = { home: 'home', plants: 'garden', varieties: 'garden', crosses: 'breeding', insights: 'insights', fruits: 'garden' };
 
 function render() {
   trackNav();
@@ -37,9 +37,8 @@ function render() {
     else if (DATA_STORES.includes(top) && parts[1] === 'new') viewForm(top, null, query);
     else if (DATA_STORES.includes(top) && parts[2] === 'edit') viewForm(top, parts[1], query);
     else if (DATA_STORES.includes(top) && parts[1]) viewDetail(top, parts[1]);
-    else if (top === 'plants' || top === 'varieties') viewGarden(top);
+    else if (top === 'plants' || top === 'varieties' || top === 'fruits') viewGarden(top, query);
     else if (top === 'crosses') viewBreeding();
-    else if (top === 'fruits') { insightState.tab = 'fruit'; viewInsights(); }
     else if (top === 'logs') viewJournal();
     else viewToday();
   } catch (e) {
@@ -64,13 +63,22 @@ function openAddSheet() {
   if (rec && parts[0] === 'plants') {
     items.push({ section: `For ${rec.tag}` },
       { icon: 'cross', label: 'Pollinate a flower on it', href: `#/crosses/new?seedPlantId=${rec.id}` },
-      { icon: 'fruit', label: 'Log a fruit from it', href: `#/fruits/new?plantId=${rec.id}` },
+      { icon: 'fruit', label: 'Tag a fruit on it', href: `#/fruits/new?plantId=${rec.id}` },
       { icon: 'note', label: 'Journal entry', href: `#/logs/new?plantId=${rec.id}` },
       { section: 'Something else' });
   } else if (rec && parts[0] === 'crosses') {
     items.push({ section: `For ${rec.code}` },
-      { icon: 'fruit', label: 'Log a fruit from this cross', href: `#/fruits/new?crossId=${rec.id}` },
+      { icon: 'fruit', label: 'Tag a fruit from this cross', href: `#/fruits/new?crossId=${rec.id}` },
       { icon: 'sprout', label: 'Add a seedling from it', href: `#/plants/new?origin=Seedling&crossId=${rec.id}` },
+      { section: 'Something else' });
+  } else if (rec && parts[0] === 'fruits' && rec.stage === 'Growing') {
+    items.push({ section: `For ${rec.tag}` },
+      { icon: 'check', label: 'Harvested today', run: () => setFruitStage(rec.id, 'Harvested') },
+      { icon: 'x', label: 'It was lost', sub: 'Dropped, rotted or eaten by pests', run: () => setFruitStage(rec.id, 'Lost') },
+      { section: 'Something else' });
+  } else if (rec && parts[0] === 'fruits' && rec.stage === 'Harvested') {
+    items.push({ section: `For ${rec.tag}` },
+      { icon: 'drop', label: 'Eaten today', sub: 'Then record how it tasted', run: () => setFruitStage(rec.id, 'Eaten') },
       { section: 'Something else' });
   } else if (rec && parts[0] === 'varieties') {
     items.push({ section: `For ${rec.name}` },
@@ -79,7 +87,7 @@ function openAddSheet() {
   }
   items.push(
     { icon: 'cross', label: 'Pollination', sub: 'Record a cross tonight', href: '#/crosses/new' },
-    { icon: 'fruit', label: 'Harvest', sub: 'Weigh, measure and taste a fruit', href: '#/fruits/new' },
+    { icon: 'fruit', label: 'Fruit', sub: 'Tag a pollinated fruit and follow it to harvest', href: '#/fruits/new' },
     { icon: 'note', label: 'Journal entry', sub: 'Flowering, pruning, feeding, problems', href: '#/logs/new' },
     { icon: 'sprout', label: 'Plant', sub: 'A new plant, cutting or seedling', href: '#/plants/new' },
     { icon: 'tag', label: 'Variety', sub: 'Add to your list of varieties', href: '#/varieties/new' },
@@ -103,6 +111,7 @@ document.addEventListener('click', async (e) => {
     case 'delete': deleteRecord(el.dataset.store, el.dataset.id); break;
     case 'name-variety': nameAsVariety(el.dataset.id); break;
     case 'fruit-set': setFruitSet(el.dataset.id, +v); break;
+    case 'fruit-stage': setFruitStage(el.dataset.id, v); break;
     case 'graft-took': { const p = byId('plants', el.dataset.id); p.graftTook = v; await saveRecord('plants', p); toast(v === 'Yes' ? 'Graft took' : 'Marked as failed'); render(); break; }
     case 'detail-tab': switchDetailTab(v); break;
     case 'garden-seg': replaceRoute('#/' + v); break;
@@ -150,6 +159,7 @@ document.querySelectorAll('[data-icon]').forEach((el) => el.insertAdjacentHTML('
   try {
     for (const s of DATA_STORES) S[s] = await DB.all(s);
     SETTINGS = { ...SETTINGS, ...((await DB.get('settings', 'settings')) || {}) };
+    await upgradeFruit();
   } catch (e) {
     view.innerHTML = emptyState('x', 'Can’t open your notebook', `${esc(e.message)}<br>Private browsing can block storage. Try a normal window.`);
     return;

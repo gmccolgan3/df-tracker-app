@@ -1,7 +1,7 @@
 // Offline support: always try the network first (so edits show up at once),
 // and fall back to the cached copy when there is no connection.
 // Bump VERSION when you add or rename files so the cache list is refreshed.
-const VERSION = 'dft-v3';
+const VERSION = 'dft-v4';
 const SHELL = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',
   'js/db.js', 'js/schema.js', 'js/varieties-seed.js', 'js/core.js', 'js/ui.js', 'js/data.js',

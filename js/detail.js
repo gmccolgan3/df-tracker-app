@@ -4,7 +4,7 @@
 const detailTabs = {}; // remembers the open tab per record
 let currentMenu = null; // items for the ⋯ menu on the page being shown
 
-const listRoute = (store) => ({ varieties: '#/varieties', plants: '#/plants', crosses: '#/crosses', fruits: '#/insights', logs: '#/logs' }[store]);
+const listRoute = (store) => ({ varieties: '#/varieties', plants: '#/plants', crosses: '#/crosses', fruits: '#/fruits', logs: '#/logs' }[store]);
 
 function valueHtml(f, v) {
   if (v == null || v === '') return '';
@@ -20,7 +20,7 @@ function valueHtml(f, v) {
 }
 
 // All filled-in fields, grouped, as a compact grid of label/value tiles.
-function specSheet(store, rec, skip = [], lead = []) {
+function specSheet(store, rec, skip = [], lead = [], emptyHtml = null) {
   const groups = [];
   let cur = { name: '', tiles: [] };
   let notes = '';
@@ -35,6 +35,7 @@ function specSheet(store, rec, skip = [], lead = []) {
   if (lead.length) groups.unshift({ name: 'Worked out', tiles: lead.map(([k, v]) => `<div class="spec"><span>${esc(k)}</span><b>${esc(v)}</b></div>`) });
   const html = groups.filter((g) => g.tiles.length).map((g) => `<div class="spec-group">${g.name ? `<h3>${esc(g.name)}</h3>` : ''}<div class="specs">${g.tiles.join('')}</div></div>`).join('');
   const notesHtml = notes ? `<div class="spec-group"><h3>Notes</h3><p class="note-text">${esc(notes)}</p></div>` : '';
+  if (!html && !notesHtml && emptyHtml != null) return emptyHtml;
   if (!html && !notesHtml) return `<div class="card pad"><p class="muted center">Nothing else recorded yet. Tap ${icon('edit', 'inline')} to add details.</p></div>`;
   return `<div class="card pad">${html}${notesHtml}</div>`;
 }
@@ -60,6 +61,36 @@ function hero({ rec, ic, tone = '', eyebrow = '', title, sub = '', pills = '' })
 
 const callout = ({ ic, tone = 'brand', title, body = '', actions = '' }) =>
   `<section class="callout ${tone}"><span class="callout-ico">${icon(ic)}</span><div class="callout-main"><b>${esc(title)}</b>${body ? `<p>${body}</p>` : ''}${actions ? `<div class="btn-row">${actions}</div>` : ''}</div></section>`;
+
+// One parent of a ♀ × ♂ pair, linked to its plant when there is one.
+function parentCard(id, sex, roleLabel, fallback) {
+  const p = byId('plants', id);
+  if (!p) return `<div class="parent"><span class="sex">${sex}</span><span class="avatar">${icon('sprout')}</span><b>${esc(fallback)}</b><small>${esc(roleLabel)}</small></div>`;
+  return `<a class="parent" href="#/plants/${p.id}"><span class="sex">${sex}</span>${avatar(p, 'sprout', 'green')}<b>${esc(varietyName(p.varietyId) || p.tag)}</b><small>${esc(p.tag)} · ${esc(roleLabel)}</small></a>`;
+}
+function pollenCard(source, id) {
+  if (source === 'Another plant') return parentCard(id, '♂', 'pollen', 'Not set');
+  if (!source) return `<div class="parent"><span class="sex">♂</span><span class="avatar">${icon('flask')}</span><b>Not recorded</b><small>pollen</small></div>`;
+  return `<div class="parent"><span class="sex">♂</span><span class="avatar">${icon(source === 'Self' ? 'sprout' : 'flask')}</span><b>${source === 'Self' ? 'Self' : 'Open'}</b><small>${source === 'Self' ? 'its own pollen' : 'insects or wind'}</small></div>`;
+}
+const duo = (mom, dad) => `<div class="duo">${mom}<span class="times" aria-label="crossed with">×</span>${dad}</div>`;
+
+// Pollinated → Growing → Harvested → Eaten (or → Lost), with dates and the days between.
+function fruitJourney(f) {
+  const from = pollinatedOn(f);
+  const lost = f.stage === 'Lost';
+  const grew = f.harvestDate && from ? daysBetween(from, f.harvestDate) : lost && f.lostDate && from ? daysBetween(from, f.lostDate) : null;
+  const steps = [
+    ['Pollinated', from ? fmtShort(from) : 'Date not set'],
+    ['Growing', f.stage === 'Growing' ? (from ? `Day ${daysBetween(from, today())}` : '') : grew != null ? plural(grew, 'day') : ''],
+    ...(lost
+      ? [['Lost', [fmtShort(f.lostDate), f.lostReason].filter(Boolean).join(' · ')]]
+      : [['Harvested', fmtShort(f.harvestDate)], ['Eaten', fmtShort(f.eatenDate)]]),
+  ];
+  const now = { Growing: 1, Harvested: 2, Eaten: 3, Lost: 2 }[f.stage] ?? 1;
+  return `<ol class="journey${lost ? ' lost' : ''}" aria-label="Where this fruit is">${steps.map(([label, sub], i) =>
+    `<li class="${i < now ? 'done' : i === now ? 'now' : ''}"${i === now ? ' aria-current="step"' : ''}><b>${esc(label)}</b>${sub ? `<span>${esc(sub)}</span>` : ''}</li>`).join('')}</ol>`;
+}
 
 function viewDetail(store, id) {
   const rec = byId(store, id);
@@ -125,21 +156,23 @@ function familyTab(p) {
   const asDad = S.crosses.filter((c) => c.pollenPlantId === p.id && c.pollenSource === 'Another plant');
   const cuttings = S.plants.filter((x) => x.origin === 'Cutting' && x.parentPlantId === p.id);
   const kids = S.plants.filter((x) => x.origin === 'Seedling' && [...asMom, ...asDad].some((c) => c.id === x.crossId));
+  const pollinated = S.fruits.filter((f) => f.pollenSource === 'Another plant' && f.pollenPlantId === p.id).sort(fruitOrder);
   return `
     ${section('Ancestry', `<div class="card pad"><ul class="tree">${pedigreeNode(p, '', 0, new Set())}</ul></div>`)}
     ${asMom.length || asDad.length ? section('Crosses it’s in', `<div class="card list">${[...asMom, ...asDad].sort((a, b) => natural(b.date, a.date)).map(crossRow).join('')}</div>`) : ''}
+    ${pollinated.length ? section('Fruit it pollinated', `<div class="card list">${pollinated.map(fruitRow).join('')}</div>`) : ''}
     ${kids.length ? section('Seedlings', `<div class="card list">${kids.map(plantRow).join('')}</div>`) : ''}
     ${cuttings.length ? section('Cuttings taken', `<div class="card list">${cuttings.map(plantRow).join('')}</div>`) : ''}
-    ${!asMom.length && !asDad.length && !cuttings.length ? `<p class="count">No offspring yet. Use ${icon('more', 'inline')} to pollinate a flower or take a cutting.</p>` : ''}`;
+    ${!asMom.length && !asDad.length && !cuttings.length && !pollinated.length ? `<p class="count">No offspring yet. Use ${icon('more', 'inline')} to pollinate a flower or take a cutting.</p>` : ''}`;
 }
 
 function fruitTab(fruits, addHref) {
-  const add = `<a class="btn block" href="${addHref}">${icon('plus')}Log a fruit</a>`;
-  if (!fruits.length) return emptyState('fruit', 'No fruit yet', 'Each harvest you log shows up here, with averages once there are a few.', add);
+  const add = `<a class="btn block" href="${addHref}">${icon('plus')}Tag a fruit</a>`;
+  if (!fruits.length) return emptyState('fruit', 'No fruit yet', 'Tag each fruit when it’s pollinated and follow it through harvest and tasting. They show up here, with averages once there are a few.', add);
   const s = fruitStats(fruits);
   return `
     ${metrics([['Fruit', s.n], ['Avg weight', fmt(s.weight), 'g'], ['Avg Brix', fmt(s.brix, 1), '°Bx'], ['Avg score', fmt(s.overall, 1), '/5']])}
-    <div class="card list">${fruits.sort((a, b) => natural(b.harvestDate, a.harvestDate)).map(fruitRow).join('')}</div>${add}`;
+    <div class="card list">${fruits.sort(fruitOrder).map(fruitRow).join('')}</div>${add}`;
 }
 
 function journalTab(p) {
@@ -188,7 +221,7 @@ const DETAIL = {
       ],
       menu: [
         { icon: 'cross', label: 'Pollinate a flower on it', sub: 'Record a cross with this as the seed parent', href: `#/crosses/new?seedPlantId=${p.id}` },
-        { icon: 'fruit', label: 'Log a fruit', href: `#/fruits/new?plantId=${p.id}` },
+        { icon: 'fruit', label: 'Tag a fruit on it', sub: 'Follow one fruit from pollination to eating', href: `#/fruits/new?plantId=${p.id}` },
         { icon: 'note', label: 'Add a journal entry', href: `#/logs/new?plantId=${p.id}` },
         { icon: 'scissors', label: 'Take a cutting', sub: 'Add a new plant cut from this one', href: `#/plants/new?origin=Cutting&parentPlantId=${p.id}${p.varietyId ? '&varietyId=' + p.varietyId : ''}` },
         ...(unnamed ? [{ icon: 'award', label: 'Name as a variety', sub: 'Start a variety of your own from this seedling', run: () => nameAsVariety(p.id) }] : []),
@@ -200,12 +233,6 @@ const DETAIL = {
     const s = crossStats(c);
     const st = crossStatus(c);
     const t = today();
-    const parent = (id, sex, roleLabel, fallback) => {
-      const p = byId('plants', id);
-      if (!p) return `<div class="parent"><span class="sex">${sex}</span><span class="avatar">${icon('sprout')}</span><b>${esc(fallback)}</b><small>${esc(roleLabel)}</small></div>`;
-      return `<a class="parent" href="#/plants/${p.id}"><span class="sex">${sex}</span>${avatar(p, 'sprout', 'green')}<b>${esc(varietyName(p.varietyId) || p.tag)}</b><small>${esc(p.tag)} · ${esc(roleLabel)}</small></a>`;
-    };
-    const dad = c.pollenSource === 'Another plant' ? parent(c.pollenPlantId, '♂', 'pollen', 'Not set') : `<div class="parent"><span class="sex">♂</span><span class="avatar">${icon(c.pollenSource === 'Self' ? 'sprout' : 'flask')}</span><b>${c.pollenSource === 'Self' ? 'Self' : 'Open'}</b><small>${c.pollenSource === 'Self' ? 'its own pollen' : 'insects or wind'}</small></div>`;
 
     let call = '';
     if (st === 'Waiting') {
@@ -217,11 +244,15 @@ const DETAIL = {
       call = callout({ ic: 'clock', tone: 'warn', title: n === 1 ? 'Did it set fruit?' : `How many of the ${n} flowers set fruit?`,
         body: days < 7 ? `Pollinated ${days === 0 ? 'today' : plural(days, 'day') + ' ago'}. You can usually tell after a week or two: a set fruit stays green and swells.` : `Pollinated ${plural(days, 'day')} ago. A set fruit stays green and swells; a failed one yellows and drops.`,
         actions: choices });
-    } else if (st === 'Fruit set' && !s.fruits.length) {
-      const from = addDays(c.date, 30), to = addDays(c.date, 50);
-      call = callout({ ic: 'fruit', title: t > to ? 'Should be ripe by now' : 'Ripening',
-        body: `Red and white types usually ripen 30–50 days after pollination: around ${fmtShort(from)} – ${fmtShort(to)}. Yellow types take months longer.`,
-        actions: `<a class="btn primary" href="#/fruits/new?crossId=${c.id}">${icon('plus')}Log the harvest</a>` });
+    } else if (st === 'Fruit set' && s.fruits.length < num(c.fruitSet)) {
+      const left = num(c.fruitSet) - s.fruits.length;
+      call = callout({ ic: 'tag', title: s.fruits.length ? `Tag ${plural(left, 'more fruit', 'more fruit')}` : 'Tag each fruit',
+        body: `${plural(num(c.fruitSet), 'fruit')} set. Give each one a fruit tag so you can follow it to harvest and compare them one by one.`,
+        actions: `<a class="btn primary" href="#/fruits/new?crossId=${c.id}">${icon('plus')}Add ${nextCode('fruits', 'tag', 'F')}</a>` });
+    } else if (st === 'Fruit set' && s.fruits.some((f) => f.stage === 'Growing')) {
+      const from = addDays(c.date, RIPE_FROM), to = addDays(c.date, RIPE_TO);
+      call = callout({ ic: 'fruit', tone: 'green', title: t > to ? 'Should be ripe by now' : 'Ripening',
+        body: `Red and white types usually ripen 30–50 days after pollination: around ${fmtShort(from)} – ${fmtShort(to)}. Mark each fruit as harvested from its own page.` });
     } else if (st === 'Fruit set' && s.fruits.length) {
       call = callout({ ic: 'seed', tone: 'green', title: 'Sowing the seeds?', body: 'Record how many you sow, then add the seedlings that come up.',
         actions: `<a class="btn" href="#/crosses/${c.id}/edit">Record sowing</a><a class="btn primary" href="#/plants/new?origin=Seedling&crossId=${c.id}">${icon('plus')}Add a seedling</a>` });
@@ -232,7 +263,7 @@ const DETAIL = {
       menuTitle: crossLabel(c),
       hero: `
         <header class="duo-wrap">
-          <div class="duo">${parent(c.seedPlantId, '♀', 'seed', 'Not set')}<span class="times" aria-label="crossed with">×</span>${dad}</div>
+          ${duo(parentCard(c.seedPlantId, '♀', 'seed', 'Not set'), pollenCard(c.pollenSource, c.pollenPlantId))}
           <div class="duo-caption"><h2>${esc(c.code)}</h2><span>Pollinated ${esc(fmtDate(c.date))}</span>${statusPill(st)}</div>
         </header>`,
       metrics: [['Flowers', num(c.flowers) ?? '–'], ['Fruit set', s.setRate == null ? '–' : Math.round(s.setRate * 100), s.setRate == null ? '' : '%'], ['Fruit', s.fruits.length], ['Seedlings', s.seedlings.length]],
@@ -248,7 +279,7 @@ const DETAIL = {
         }],
       ],
       menu: [
-        { icon: 'fruit', label: 'Log a fruit from this cross', href: `#/fruits/new?crossId=${c.id}` },
+        { icon: 'fruit', label: 'Tag a fruit from this cross', href: `#/fruits/new?crossId=${c.id}` },
         { icon: 'sprout', label: 'Add a seedling', href: `#/plants/new?origin=Seedling&crossId=${c.id}` },
         { icon: 'cross', label: 'Repeat this cross', sub: 'Same parents, new pollination', href: `#/crosses/new?seedPlantId=${c.seedPlantId || ''}&pollenSource=${encodeURIComponent(c.pollenSource || '')}${c.pollenPlantId ? '&pollenPlantId=' + c.pollenPlantId : ''}` },
       ],
@@ -285,16 +316,42 @@ const DETAIL = {
   fruits(f) {
     const p = byId('plants', f.plantId);
     const c = byId('crosses', f.crossId);
-    const derived = fruitDerived(f);
+    const t = today();
+    const from = pollinatedOn(f);
+    const stageBtn = (v, label, primary) => `<button class="btn${primary ? ' primary' : ''}" data-act="fruit-stage" data-id="${f.id}" data-v="${v}">${primary ? icon('check') : ''}${esc(label)}</button>`;
+
+    let call = '';
+    if (f.stage === 'Growing') {
+      const a = from && addDays(from, RIPE_FROM), b = from && addDays(from, RIPE_TO);
+      call = callout({ ic: 'fruit', tone: b && t > b ? 'warn' : 'green',
+        title: !from ? 'Growing' : t > b ? 'Should be ripe by now' : t >= a ? 'Ripe any day now' : 'Growing',
+        body: from ? `Day ${daysBetween(from, t)} since pollination. Red and white types usually ripen 30–50 days after pollination, around ${fmtShort(a)} – ${fmtShort(b)}. Yellow types take months longer.`
+          : 'Add the pollination date to see when it should ripen.',
+        actions: stageBtn('Lost', 'It was lost') + stageBtn('Harvested', 'Harvested today', true) });
+    } else if (f.stage === 'Harvested') {
+      const measured = num(f.weight) != null || brixOf(f) != null;
+      call = callout({ ic: 'drop', title: measured ? 'Eaten yet?' : 'Weigh it and taste it',
+        body: measured ? 'When you cut it open, record the Brix and how it tasted.' : `Harvested ${fmtShort(f.harvestDate)}. Weight, Brix and a score are enough to start comparing fruit.`,
+        actions: `<a class="btn" href="#/fruits/${f.id}/edit">${measured ? 'Edit measurements' : 'Weigh and measure'}</a>` + stageBtn('Eaten', 'Eaten today', true) });
+    } else if (f.stage === 'Eaten' && num(f.overall) == null && brixOf(f) == null) {
+      call = callout({ ic: 'drop', title: 'How did it taste?', body: 'Brix, sweetness, flavor and an overall score let you rank it against other fruit.',
+        actions: `<a class="btn primary" href="#/fruits/${f.id}/edit?open=Taste">Record the taste</a>` });
+    }
+
+    const edible = num(f.weight) && num(f.pulpWeight) ? Math.round((f.pulpWeight / f.weight) * 100) : null;
+    const shown = ['tag', 'pollinatedDate', 'plantId', 'pollenSource', 'pollenPlantId', 'crossId', 'stage', 'harvestDate', 'eatenDate', 'lostDate', 'lostReason', 'weight', 'brixCenter', 'overall'];
+    const pollination = section('Pollination', `${duo(parentCard(f.plantId, '♀', 'grew on', 'Not set'), pollenCard(f.pollenSource, f.pollenPlantId))}
+      <p class="count">${from ? `Pollinated ${esc(fmtDate(from))}` : 'Pollination date not set'}${c ? ` · cross <a href="#/crosses/${c.id}">${esc(c.code)}</a>` : ''}</p>`);
     return {
-      barTitle: 'Fruit',
+      barTitle: f.tag || 'Fruit',
       menuTitle: fruitLabel(f),
-      hero: hero({ rec: f, ic: 'fruit', tone: fleshTone(f.fleshColor) || 'brand', eyebrow: `Harvested ${fmtDate(f.harvestDate)}`, title: p ? p.tag : 'Fruit',
-        sub: `${p ? `<a href="#/plants/${p.id}">${esc(plantKind(p))}</a> · ` : ''}${c ? `from <a href="#/crosses/${c.id}">${esc(c.code)}</a>` : 'open-pollinated'}`,
-        pills: [f.fleshColor ? pill(f.fleshColor + ' flesh') : '', f.cracking && f.cracking !== 'None' ? pill(f.cracking + ' cracking', 'warn') : ''].join('') }),
-      metrics: [['Weight', fmt(f.weight), num(f.weight) == null ? '' : 'g'], ['Brix', fmt(brixOf(f), 1), brixOf(f) == null ? '' : '°Bx'], ['Score', num(f.overall) ?? '–', num(f.overall) == null ? '' : '/5'], ['Edible', num(f.weight) && num(f.pulpWeight) ? Math.round((f.pulpWeight / f.weight) * 100) : '–', num(f.weight) && num(f.pulpWeight) ? '%' : '']],
-      body: `<div class="spacer"></div>` + specSheet('fruits', f, ['plantId', 'crossId', 'harvestDate', 'weight', 'brixCenter', 'overall'], derived.filter((d) => d[0] !== 'Edible share')) + gallery(f.photos),
-      menu: [{ icon: 'fruit', label: 'Log another fruit from this plant', href: `#/fruits/new?plantId=${f.plantId}${f.crossId ? '&crossId=' + f.crossId : ''}` }],
+      hero: hero({ rec: f, ic: 'fruit', tone: fleshTone(f.fleshColor) || 'brand', eyebrow: 'Fruit', title: f.tag || 'Fruit',
+        sub: p ? `on <a href="#/plants/${p.id}">${esc(p.tag)}</a> · ${esc(plantKind(p))}` : '',
+        pills: [statusPill(f.stage), f.fleshColor ? pill(f.fleshColor + ' flesh') : '', f.cracking && f.cracking !== 'None' ? pill(f.cracking + ' cracking', 'warn') : ''].join('') }),
+      metrics: isPicked(f) ? [['Weight', fmt(f.weight), num(f.weight) == null ? '' : 'g'], ['Brix', fmt(brixOf(f), 1), brixOf(f) == null ? '' : '°Bx'], ['Score', num(f.overall) ?? '–', num(f.overall) == null ? '' : '/5'], ['Edible', edible ?? '–', edible == null ? '' : '%']] : null,
+      callout: fruitJourney(f) + call,
+      body: pollination + section(isPicked(f) ? 'Measurements' : '', specSheet('fruits', f, shown, fruitDerived(f).filter((d) => d[0] !== 'Edible share'), isPicked(f) ? null : '')) + gallery(f.photos),
+      menu: [{ icon: 'fruit', label: 'Tag another fruit like this', sub: 'Same plant, pollen and date', href: `#/fruits/new?plantId=${f.plantId || ''}&pollinatedDate=${from}&pollenSource=${encodeURIComponent(f.pollenSource || '')}${f.pollenPlantId ? '&pollenPlantId=' + f.pollenPlantId : ''}${f.crossId ? '&crossId=' + f.crossId : ''}` }],
     };
   },
 

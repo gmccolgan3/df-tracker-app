@@ -74,7 +74,14 @@ function crossParents(c) {
   return `${mom} × ${c.pollenPlantId ? parentName(c.pollenPlantId) : '?'}`;
 }
 const crossLabel = (c) => (c ? `${c.code} · ${crossParents(c)}` : '(deleted cross)');
-const fruitLabel = (f) => `${fmtDate(f.harvestDate)} · ${byId('plants', f.plantId)?.tag ?? '?'}`;
+const fruitLabel = (f) => `${f.tag || 'Fruit'} · ${byId('plants', f.plantId)?.tag ?? '?'}`;
+// "Sample Red × Sample White", like a cross, from the fruit's own pollination details.
+function fruitParents(f) {
+  const mom = parentName(f.plantId);
+  if (f.pollenSource === 'Self') return `${mom} ⊗ self`;
+  if (f.pollenSource === 'Open / insects') return `${mom} × open`;
+  return `${mom} × ${f.pollenPlantId ? parentName(f.pollenPlantId) : '?'}`;
+}
 const logLabel = (l) => `${fmtDate(l.date)} · ${l.kind}`;
 const LABEL = { varieties: (r) => r.name, plants: plantLabel, crosses: crossLabel, fruits: fruitLabel, logs: logLabel };
 
@@ -86,7 +93,18 @@ function crossStatus(c) {
   return 'Waiting';
 }
 const STATUS_TONE = { Waiting: 'warn', 'Fruit set': 'good', 'Seeds sown': 'good', Seedlings: 'brand', Failed: 'dim',
-  Active: 'good', Dead: 'dim', 'Given away': 'dim', Culled: 'dim' };
+  Active: 'good', Dead: 'dim', 'Given away': 'dim', Culled: 'dim',
+  Growing: 'green', Harvested: 'brand', Eaten: 'purple', Lost: 'dim' };
+
+// Red and white types usually ripen 30–50 days after pollination; yellow types take months longer.
+const RIPE_FROM = 30, RIPE_TO = 50;
+const pollinatedOn = (f) => f.pollinatedDate || byId('crosses', f.crossId)?.date || '';
+const daysToRipen = (f) => (pollinatedOn(f) && f.harvestDate ? daysBetween(pollinatedOn(f), f.harvestDate) : null);
+const isPicked = (f) => f.stage === 'Harvested' || f.stage === 'Eaten';
+// The date that marks where a fruit is now: picked, eaten, lost, or pollinated while it grows.
+const fruitDate = (f) => ({ Harvested: f.harvestDate, Eaten: f.eatenDate || f.harvestDate, Lost: f.lostDate }[f.stage] || pollinatedOn(f));
+// Newest news first: the latest stage change, then the tag.
+const fruitOrder = (a, b) => natural(fruitDate(b), fruitDate(a)) || natural(b.tag, a.tag);
 
 // Next free code with a prefix, e.g. P-007 or X-012.
 function nextCode(store, key, prefix) {
@@ -116,7 +134,7 @@ function crossStats(c) {
     avgWeight: avg(fruits.map((f) => f.weight)),
     avgBrix: avg(fruits.map(brixOf)),
     avgOverall: avg(fruits.map((f) => f.overall)),
-    avgDays: avg(fruits.filter((f) => c.date && f.harvestDate).map((f) => daysBetween(c.date, f.harvestDate))),
+    avgDays: avg(fruits.map(daysToRipen)),
   };
 }
 
@@ -134,8 +152,8 @@ function fruitDerived(f) {
   if (num(f.weight) && num(f.pulpWeight)) out.push(['Edible share', pct(f.pulpWeight / f.weight)]);
   if (num(f.length) && num(f.diameter)) out.push(['Length ÷ width', fmt(f.length / f.diameter, 2)]);
   if (num(f.brixCenter) != null && num(f.brixEdge) != null) out.push(['Brix drop to edge', fmt(f.brixCenter - f.brixEdge, 1)]);
-  const c = byId('crosses', f.crossId);
-  if (c && c.date && f.harvestDate) out.push(['Days to ripen', daysBetween(c.date, f.harvestDate)]);
+  if (daysToRipen(f) != null) out.push(['Days to ripen', daysToRipen(f)]);
+  if (f.harvestDate && f.eatenDate) out.push(['Days before eating', daysBetween(f.harvestDate, f.eatenDate)]);
   return out;
 }
 
